@@ -67,13 +67,13 @@ parser.add_argument('--seed', type=int, default=123,
                     help='random seed to use. default=123.')
 parser.add_argument('--model', type=str, default='resnet50',choices=model_names,
                     help='type of model to use. see vision_model for options.')
-parser.add_argument('--save-model-prefix', type=str, default='margin_loss_model',
-                    help='prefix of models to be saved.')
+#parser.add_argument('--save-model-prefix', type=str, default='margin_loss_model',
+#                    help='prefix of models to be saved.')
 parser.add_argument('--use-pretrained', action='store_true',
                     help='enable using pretrained model from gluon.')
-parser.add_argument('--kvstore', type=str, default='device',
-                    help='kvstore to use for trainer.')
-parser.add_argument('--log-interval', type=int, default=20,
+#parser.add_argument('--kvstore', type=str, default='device',
+#                    help='kvstore to use for trainer.')
+parser.add_argument('--print-freq', type=int, default=20,
                     help='number of batches to wait before logging.')
 args = parser.parse_args()
 
@@ -181,17 +181,19 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
     model.train()
 
     end = time.time()
-    for i, (input, target) in enumerate(train_loader):
+    for i, input in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
         if args.gpu is not None:
             input = input.cuda(args.gpu, non_blocking=True)
-        target = target.cuda(args.gpu, non_blocking=True)
 
         # compute output
-        output = model(input)
-        loss = criterion(output, target)
+        a_indices, anchors, positives, negatives, _ = model(input)
+        if args.lr_beta > 0.0:
+            L = criterion(anchors, positives, negatives, beta, y[a_indices])
+        else:
+            L = criterion(anchors, positives, negatives, args.lr_beta, y[a_indices])
 
         # measure accuracy and record loss
         losses.update(loss.item(), input.size(0))
@@ -216,9 +218,12 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
 def adjust_learning_rate(optimizer, epoch, args):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
-    lr = args.lr * (0.1 ** (epoch // 30))
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
+    steps = [int(step) for step in args.steps.split(',')]
+    #lr = args.lr * (0.1 ** (epoch // 30))
+    if epoch in steps:
+        for param_group in optimizer.param_groups:
+            #param_group['lr'] = lr
+            param_group['lr'] *= args.factor
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
