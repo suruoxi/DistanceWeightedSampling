@@ -1,11 +1,12 @@
 import torch
 import torchvision
 import random
-import torch.utils.data.sampler.Sampler as Sampler
+from torch.utils.data.sampler import  Sampler
 from scipy.special import comb
+import numpy as np
 
-class BalancedBatchSampler(torch.utils.data.sampler.Sampler):
-    def __init__(self, dataset, batch_size, batch_k, lenght=None):
+class BalancedBatchSampler(Sampler):
+    def __init__(self, dataset, batch_size, batch_k, length=None):
         assert (batch_size % batch_k == 0 ) and (batch_size > 0)
         self.dataset = {}
         self.balanced_max = 0
@@ -43,5 +44,13 @@ class BalancedBatchSampler(torch.utils.data.sampler.Sampler):
             return self.length
         return int(len(self.keys) * (comb(self.max_samples, self.batch_k) + comb(self.min_samples, self.batch_k))/2)
         
+    def _get_label(self, dataset, idx):
+        dataset_type = type(dataset)
+        if dataset_type is torchvision.datasets.MNIST:
+            return dataset.train_labels[idx].item()
+        elif dataset_type is torchvision.datasets.ImageFolder:
+            return dataset.imgs[idx][1]
+        else:
+            raise NotImplementedError
         
 	
