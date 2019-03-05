@@ -9,7 +9,7 @@ def l2_norm(x):
     return F.normalize(x, p=2, dim=1)
 
 
-def get_distanceee(x):
+def get_distance(x):
     sim = torch.matmul(x, x.t())
     dist = 2 - 2*sim
     dist = dist.sqrt()
@@ -116,7 +116,7 @@ class   DistanceWeightedSampling(nn.Module):
         self.cutoff = cutoff
         self.nonzero_loss_cutoff = nonzero_loss_cutoff
 
-    def input(self, x):
+    def forward(self, x):
         k = self.batch_k
         n, d = x.shape
         distance = get_distance(x)

@@ -14,6 +14,8 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
 from torch import nn
+from torch.autograd import Variable
+from torch.nn import Parameter
 
 from model import *
 from sampler import BalancedBatchSampler 
@@ -37,6 +39,8 @@ parser.add_argument('--embed-dim', type=int, default=128,
                     help='dimensionality of image embedding. default is 128.')
 parser.add_argument('--feat-dim', type=int, default=512,
                     help='dimensionality of base_net output. default is 512.')
+parser.add_argument('--classes', type=int, required=True,
+                    help='number of classes in dataset')
 parser.add_argument('--batch-size', type=int, default=70,
                     help='training batch size per device (CPU/GPU). default is 70.')
 parser.add_argument('--batch-k', type=int, default=5,
@@ -102,6 +106,10 @@ criterion = MarginLoss(margin=args.margin,nu=args.nu)
 optimizer = torch.optim.SGD(model.parameters(), args.lr, momentum=args.momentum, 
         weight_decay = args.weight_decay)
 
+beta = Parameter(torch.ones((args.classes,), dtype=torch.float32)*args.beta)
+
+optimizer_beta = torch.optim.SGD(beta, args.lr_beta, momentum=args.momentum, weight_decay=args.weight_decay)
+
 if args.resume:
     if os.path.isfile(args.resume):
         print("=> loading checkpoint '{}'".format(args.resume))
@@ -125,6 +133,7 @@ if args.resume:
 
 
 model.cuda()
+
 
 # dataset 
 traindir = os.path.join(args.data_path, 'train')
@@ -172,7 +181,7 @@ train_loader = torch.utils.data.DataLoader(
 #    return names, accs
 #
 
-def train(train_loader, model, criterion, optimizer, epoch, args):
+def train(train_loader, model, criterion, optimizer, optimizer_beta, epoch, args):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -181,26 +190,29 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
     model.train()
 
     end = time.time()
-    for i, input in enumerate(train_loader):
+    for i, (x,y) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
         if args.gpu is not None:
-            input = input.cuda(args.gpu, non_blocking=True)
+            x = x.cuda(args.gpu, non_blocking=True)
+        y = y.cuda()
 
         # compute output
-        a_indices, anchors, positives, negatives, _ = model(input)
+        a_indices, anchors, positives, negatives, _ = model(x)
         if args.lr_beta > 0.0:
-            L = criterion(anchors, positives, negatives, beta, y[a_indices])
+            loss = criterion(anchors, positives, negatives, beta, y[a_indices])
         else:
-            L = criterion(anchors, positives, negatives, args.lr_beta, y[a_indices])
+            loss = criterion(anchors, positives, negatives, args.beta, None)
 
         # measure accuracy and record loss
-        losses.update(loss.item(), input.size(0))
+        losses.update(loss.item(), x.size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
+        optimizer_beta.zero_grad()
         loss.backward()
+        optimizer.step()
         optimizer.step()
 
         # measure elapsed time
@@ -246,9 +258,10 @@ class AverageMeter(object):
 if __name__ == "__main__":
     for epoch in range(args.start_epoch, args.epochs):
         adjust_learning_rate(optimizer, epoch, args)
+        adjust_learning_rate(optimizer_beta, epoch, args)
         
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch, args)
+        train(train_loader, model, criterion, optimizer, optimizer_beta,  epoch, args)
 
         # evaluate
         # 
