@@ -13,6 +13,7 @@ def get_distance(x):
     _x = x.detach()
     sim = torch.matmul(_x, _x.t())
     dist = 2 - 2*sim
+    dist += torch.eye(dist.shape[0]).to(dist.device)   # maybe dist += torch.eye(dist.shape[0]).to(dist.device)*1e-8
     dist = dist.sqrt()
     return dist
 
@@ -121,7 +122,7 @@ class   DistanceWeightedSampling(nn.Module):
         n, d = x.shape
         distance = get_distance(x)
         distance = distance.clamp(min=self.cutoff)
-        log_weights = ((2.0 - float(d)) * distance.log() - (float(d-3)/2)*torch.log(1.0 - 0.25*(distance*distance)))
+        log_weights = ((2.0 - float(d)) * distance.log() - (float(d-3)/2)*torch.log(torch.clamp(1.0 - 0.25*(distance*distance), min=1e-8)))
 
         weights = torch.exp(log_weights - torch.max(log_weights))
 

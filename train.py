@@ -144,6 +144,9 @@ if args.resume:
         print("=> no checkpoint found at '{}'".format(args.resume))
 
 
+#if len(args.gpus.split(',')) > 1:
+#    model = torch.nn.DataParallel(model)
+
 model.cuda()
 
 
