@@ -57,6 +57,8 @@ parser.add_argument('--lr-beta', type=float, default=0.1,
                     help='learning rate for the beta in margin based loss. default is 0.1.')
 parser.add_argument('--margin', type=float, default=0.2,
                     help='margin for the margin based loss. default is 0.2.')
+parser.add_argument('--momentum', type=float, default=0.9,
+                    help='momentum')
 parser.add_argument('--beta', type=float, default=1.2,
                     help='initial value for beta. default is 1.2.')
 parser.add_argument('--nu', type=float, default=0.0,
@@ -65,6 +67,8 @@ parser.add_argument('--factor', type=float, default=0.5,
                     help='learning rate schedule factor. default is 0.5.')
 parser.add_argument('--steps', type=str, default='20,40,60',
                     help='epochs to update learning rate. default is 12,14,16,18.')
+parser.add_argument('--resume', type=str, default=None,
+                    help='path to checkpoint')
 parser.add_argument('--wd', type=float, default=0.0001,
                     help='weight decay rate. default is 0.0001.')
 parser.add_argument('--seed', type=int, default=123,
@@ -88,7 +92,7 @@ os.environ['VISIBLE_CUDA_DEVICES'] = args.gpus
 
 # construct model
 
-if not args.use_pretained:
+if not args.use_pretrained:
     model = models.__dict__[args.model](num_classes=args.feat_dim)
 else:
     model = models.__dict__[args.model](pretrained=True)
@@ -99,26 +103,22 @@ else:
         exit(-1)
 
 
-model = MarginNet(base_net=model, emb_dim=args.emb_dim, batch_k=args.batch_k, in_dim=args.feat_dim)
+model = MarginNet(base_net=model, emb_dim=args.embed_dim, batch_k=args.batch_k, feat_dim=args.feat_dim)
 
 criterion = MarginLoss(margin=args.margin,nu=args.nu)
 
 optimizer = torch.optim.SGD(model.parameters(), args.lr, momentum=args.momentum, 
-        weight_decay = args.weight_decay)
+        weight_decay = args.wd)
 
-beta = Parameter(torch.ones((args.classes,), dtype=torch.float32)*args.beta)
+beta = Parameter(torch.ones((args.classes,), dtype=torch.float32,device=torch.device('cuda'))*args.beta)
 
-optimizer_beta = torch.optim.SGD(beta, args.lr_beta, momentum=args.momentum, weight_decay=args.weight_decay)
+optimizer_beta = torch.optim.SGD([beta], args.lr_beta, momentum=args.momentum, weight_decay=args.wd)
 
 if args.resume:
     if os.path.isfile(args.resume):
         print("=> loading checkpoint '{}'".format(args.resume))
         checkpoint = torch.load(args.resume)
         args.start_epoch = checkpoint['epoch']
-        best_acc1 = checkpoint['best_acc1']
-        if args.gpu is not None:
-            # best_acc1 may be from a checkpoint from a different GPU
-            best_acc1 = best_acc1.to(args.gpu)
         state_dict = {}
         for k,v in checkpoint['state_dict'].items():
             if k.startswith('module.'):
@@ -194,9 +194,8 @@ def train(train_loader, model, criterion, optimizer, optimizer_beta, epoch, args
         # measure data loading time
         data_time.update(time.time() - end)
 
-        if args.gpu is not None:
-            x = x.cuda(args.gpu, non_blocking=True)
-        y = y.cuda()
+        y = y.cuda(None, non_blocking=True)
+        x = x.cuda(None, non_blocking=True)
 
         # compute output
         a_indices, anchors, positives, negatives, _ = model(x)

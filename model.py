@@ -10,7 +10,8 @@ def l2_norm(x):
 
 
 def get_distance(x):
-    sim = torch.matmul(x, x.t())
+    _x = x.detach()
+    sim = torch.matmul(_x, _x.t())
     dist = 2 - 2*sim
     dist = dist.sqrt()
     return dist
@@ -40,14 +41,14 @@ class MarginNet(nn.Module):
         - The output of DistanceWeightedSampling.
     """
     
-    def __init__(self, base_net, emb_dim, batch_k, **kwargs):
-        super(MarginNet, self).__init__(**kwargs)
+    def __init__(self, base_net, emb_dim, batch_k, feat_dim=None):
+        super(MarginNet, self).__init__()
         self.base_net = base_net
         try:
-            in_dim = base_net.fc.in_features
+            in_dim = base_net.fc.out_features
         except NameError as e:
-            if 'in_dim' in kwargs:
-                in_dim = kwargs['in_dim']
+            if feat_dim is not None:
+                in_dim = feat_dim
             else:
                 raise Exception("Neither does the base_net hase fc layer nor in_dim is specificed")
         self.dense = nn.Linear(in_dim, emb_dim)
@@ -80,10 +81,11 @@ class MarginLoss(nn.Module):
         d_ap = torch.sqrt(torch.sum(torch.sqrt(positives - anchors), dim=1) +1e-8)
         d_an = torch.sqrt(torch.sum(torch.sqrt(negatives - anchors), dim=1) +1e-8)
 
+        print(d_ap.device, beta.device, type(self._margin))
         pos_loss = torch.clamp(d_ap - beta + self._margin, max=0.0)
         neg_loss = torch.clamp(beta - d_an + self._margin, max=0.0)
 
-        pair_cnt = torch.sum((pos_loss > 0.0) + (neg_loss > 0.0)).data()
+        pair_cnt = torch.sum((pos_loss > 0.0) + (neg_loss > 0.0)).data
 
         loss = (torch.sum(pos_loss + neg_loss) + beta_reg_loss) / pair_cnt
         return loss
@@ -123,12 +125,15 @@ class   DistanceWeightedSampling(nn.Module):
         distance = distance.clamp(max=self.cutoff)
         log_weights = ((2.0 - float(d)) * distance.log() - (float(d-3)/2)*torch.log(1.0 - 0.25*(distance*distance)))
 
-        weights = torch.exp(log_weights - torch.maxx(log_weights))
+        weights = torch.exp(log_weights - torch.max(log_weights))
 
-        mask = np.ones(weights.shape)
+        if x.device.type == 'gpu':
+            weights = weights.to(x.device)
+
+        mask = torch.ones_like(weights)
         for i in range(0,n,k):
             mask[i:i+k, i:i+k] = 0
-        weights = weights*torch.Tensor(mask)*(distance < self.nonzero_loss_cutoff)
+        weights = weights*mask*((distance < self.nonzero_loss_cutoff).float())
         weights = weights/torch.sum(weights, dim=1, keepdim=True)
 
         a_indices = []

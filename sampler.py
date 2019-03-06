@@ -33,7 +33,7 @@ class BalancedBatchSampler(Sampler):
     def __iter__(self):
         while(True):
             batch = []
-            classes = np.random.choice(range(len(self.keys)), size=self.batch_size/self.batch_k, replace=False )
+            classes = np.random.choice(range(len(self.keys)), size=int(self.batch_size/self.batch_k), replace=False )
             for cls in classes:
                 cls_idxs = self.dataset[self.keys[cls]]
                 for k in np.random.choice(range(len(cls_idxs)), size=self.batch_k, replace=False):
