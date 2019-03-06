@@ -226,7 +226,7 @@ def train(train_loader, model, criterion, optimizer, optimizer_beta, epoch, args
         optimizer_beta.zero_grad()
         loss.backward()
         optimizer.step()
-        optimizer.step()
+        optimizer_beta.step()
 
         # measure elapsed time
         batch_time.update(time.time() - end)
