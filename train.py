@@ -2,6 +2,8 @@ import argparse
 import logging
 import time
 import os
+import random
+import warnings
 
 import numpy as np
 from bottleneck import argpartition
@@ -33,24 +35,24 @@ parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
 parser.add_argument('--workers', default=4, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
-parser.add_argument('--data-path', type=str, default='data/CUB_200_2011',
-                    help='path of data.')
+parser.add_argument('--data-path', type=str,required=True,
+                    help='path of data, which contains train,val subdirectory')
 parser.add_argument('--embed-dim', type=int, default=128,
                     help='dimensionality of image embedding. default is 128.')
 parser.add_argument('--feat-dim', type=int, default=512,
                     help='dimensionality of base_net output. default is 512.')
 parser.add_argument('--classes', type=int, required=True,
                     help='number of classes in dataset')
+parser.add_argument('--batch-num', type=int, required=True,
+                    help='number of batches in one epoch')
 parser.add_argument('--batch-size', type=int, default=70,
-                    help='training batch size per device (CPU/GPU). default is 70.')
+                    help='total batch_size on all gpus.')
 parser.add_argument('--batch-k', type=int, default=5,
                     help='number of images per class in a batch. default is 5.')
 parser.add_argument('--gpus', type=str, default='',
-                    help='list of gpus to use, e.g. 0 or 0,2,5. empty means using cpu.')
+                    help='list of gpus to use, e.g. 0 or 0,2,5.')
 parser.add_argument('--epochs', type=int, default=80,
                     help='number of training epochs. default is 20.')
-#parser.add_argument('--optimizer', type=str, default='adam',
-#                    help='optimizer. default is adam.')
 parser.add_argument('--lr', type=float, default=0.0001,
                     help='learning rate. default is 0.0001.')
 parser.add_argument('--lr-beta', type=float, default=0.1,
@@ -66,29 +68,39 @@ parser.add_argument('--nu', type=float, default=0.0,
 parser.add_argument('--factor', type=float, default=0.5,
                     help='learning rate schedule factor. default is 0.5.')
 parser.add_argument('--steps', type=str, default='20,40,60',
-                    help='epochs to update learning rate. default is 12,14,16,18.')
+                    help='epochs to update learning rate. default is 20,40,60.')
 parser.add_argument('--resume', type=str, default=None,
                     help='path to checkpoint')
 parser.add_argument('--wd', type=float, default=0.0001,
                     help='weight decay rate. default is 0.0001.')
-parser.add_argument('--seed', type=int, default=123,
-                    help='random seed to use. default=123.')
+parser.add_argument('--seed', type=int, default=None,
+                    help='random seed to use')
 parser.add_argument('--model', type=str, default='resnet50',choices=model_names,
                     help='type of model to use. see vision_model for options.')
-#parser.add_argument('--save-model-prefix', type=str, default='margin_loss_model',
-#                    help='prefix of models to be saved.')
 parser.add_argument('--use-pretrained', action='store_true',
                     help='enable using pretrained model from gluon.')
-#parser.add_argument('--kvstore', type=str, default='device',
-#                    help='kvstore to use for trainer.')
 parser.add_argument('--print-freq', type=int, default=20,
                     help='number of batches to wait before logging.')
 args = parser.parse_args()
 
 logging.info(args)
 
+# checking 
+assert args.batch_size % args.batch_k == 0
+assert args.batch_size > 0 and args.batch_k > 0
+assert args.batch_size // args.batch_k < args.classes
+
+# seed
+if args.seed is not None:
+    random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    cudnn.deterministic = True
+    warnings.warn('''You have chosen to seed training. This will turn on the CUDNN deterministic setting, which can slow down your training considerably! You may see unexpected behavior when restarting from checkpoints.''')
+
+
 # gpus setting
 os.environ['VISIBLE_CUDA_DEVICES'] = args.gpus
+
 
 # construct model
 
@@ -150,7 +162,7 @@ train_dataset = datasets.ImageFolder(
         normalize])
     )
 
-batch_sampler = BalancedBatchSampler(train_dataset, args.batch_size, args.batch_k, length=100000)
+batch_sampler = BalancedBatchSampler(train_dataset, args.batch_size, args.batch_k, length=args.batch_num)
 
 train_loader = torch.utils.data.DataLoader(
     batch_sampler=batch_sampler,
@@ -191,6 +203,8 @@ def train(train_loader, model, criterion, optimizer, optimizer_beta, epoch, args
 
     end = time.time()
     for i, (x,y) in enumerate(train_loader):
+        if i == args.batch_num:
+            return
         # measure data loading time
         data_time.update(time.time() - end)
 
@@ -200,9 +214,9 @@ def train(train_loader, model, criterion, optimizer, optimizer_beta, epoch, args
         # compute output
         a_indices, anchors, positives, negatives, _ = model(x)
         if args.lr_beta > 0.0:
-            loss = criterion(anchors, positives, negatives, beta, y[a_indices])
+            loss, pair_cnt = criterion(anchors, positives, negatives, beta, y[a_indices])
         else:
-            loss = criterion(anchors, positives, negatives, args.beta, None)
+            loss, pair_cnt = criterion(anchors, positives, negatives, args.beta, None)
 
         # measure accuracy and record loss
         losses.update(loss.item(), x.size(0))
@@ -222,9 +236,10 @@ def train(train_loader, model, criterion, optimizer, optimizer_beta, epoch, args
             print('Epoch: [{0}][{1}/{2}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
-                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'.format(
+                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                  'Pair Num {pair_cnt}'.format(
                    epoch, i, len(train_loader), batch_time=batch_time,
-                   data_time=data_time, loss=losses))
+                   data_time=data_time, loss=losses, pair_cnt=pair_cnt))
 
 
 def adjust_learning_rate(optimizer, epoch, args):
@@ -255,6 +270,8 @@ class AverageMeter(object):
 
 
 if __name__ == "__main__":
+    if not os.path.exists('checkpoints/'):
+        os.mkdir('checkpoints/')
     for epoch in range(args.start_epoch, args.epochs):
         adjust_learning_rate(optimizer, epoch, args)
         adjust_learning_rate(optimizer_beta, epoch, args)
@@ -271,7 +288,7 @@ if __name__ == "__main__":
             'state_dict': model.state_dict(),
             'optimizer': optimizer.state_dict()
             }
-        torch.save(state, 'checkpoint_%d.pth.tar'%(epoch+1))
+        torch.save(state, 'checkpoints/checkpoint_%d.pth.tar'%(epoch+1))
 
 
 

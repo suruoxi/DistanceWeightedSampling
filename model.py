@@ -77,18 +77,16 @@ class MarginLoss(nn.Module):
             beta = beta_in
             beta_reg_loss = 0.0
 
+        d_ap = torch.sqrt(torch.sum((positives - anchors)**2, dim=1) +1e-8)
+        d_an = torch.sqrt(torch.sum((negatives - anchors)**2, dim=1) +1e-8)
 
-        d_ap = torch.sqrt(torch.sum(torch.sqrt(positives - anchors), dim=1) +1e-8)
-        d_an = torch.sqrt(torch.sum(torch.sqrt(negatives - anchors), dim=1) +1e-8)
+        pos_loss = torch.clamp(d_ap - beta + self._margin, min=0.0)
+        neg_loss = torch.clamp(beta - d_an + self._margin, min=0.0)
 
-        print(d_ap.device, beta.device, type(self._margin))
-        pos_loss = torch.clamp(d_ap - beta + self._margin, max=0.0)
-        neg_loss = torch.clamp(beta - d_an + self._margin, max=0.0)
-
-        pair_cnt = torch.sum((pos_loss > 0.0) + (neg_loss > 0.0)).data
+        pair_cnt = int(torch.sum((pos_loss > 0.0) + (neg_loss > 0.0)))
 
         loss = (torch.sum(pos_loss + neg_loss) + beta_reg_loss) / pair_cnt
-        return loss
+        return loss, pair_cnt
 
 
 class   DistanceWeightedSampling(nn.Module):
@@ -122,7 +120,7 @@ class   DistanceWeightedSampling(nn.Module):
         k = self.batch_k
         n, d = x.shape
         distance = get_distance(x)
-        distance = distance.clamp(max=self.cutoff)
+        distance = distance.clamp(min=self.cutoff)
         log_weights = ((2.0 - float(d)) * distance.log() - (float(d-3)/2)*torch.log(1.0 - 0.25*(distance*distance)))
 
         weights = torch.exp(log_weights - torch.max(log_weights))
