@@ -126,14 +126,19 @@ class   DistanceWeightedSampling(nn.Module):
 
         weights = torch.exp(log_weights - torch.max(log_weights))
 
+
         if x.device.type == 'gpu':
             weights = weights.to(x.device)
 
         mask = torch.ones_like(weights)
         for i in range(0,n,k):
             mask[i:i+k, i:i+k] = 0
+
+        mask_uniform_probs = mask *(1.0/(n-k))
+
         weights = weights*mask*((distance < self.nonzero_loss_cutoff).float())
-        weights = weights/torch.sum(weights, dim=1, keepdim=True)
+        weights_sum = torch.sum(weights, dim=1, keepdim=True)
+        weights = weights / weights_sum
 
         a_indices = []
         p_indices = []
@@ -143,10 +148,10 @@ class   DistanceWeightedSampling(nn.Module):
         for i in range(n):
             block_idx = i // k
 
-            try:
+            if weights_sum[i] != 0:
                 n_indices +=  np.random.choice(n, k-1, p=np_weights[i]).tolist()
-            except:
-                n_indices +=  np.random.choice(n, k-1).tolist()
+            else:
+                n_indices +=  np.random.choice(n, k-1, p=mask_uniform_probs[i]).tolist()
             for j in range(block_idx * k, (block_idx + 1)*k):
                 if j != i:
                     a_indices.append(i)
