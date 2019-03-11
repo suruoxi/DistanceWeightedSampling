@@ -99,7 +99,7 @@ if args.seed is not None:
 
 
 # gpus setting
-os.environ['VISIBLE_CUDA_DEVICES'] = args.gpus
+os.environ['CUDA_VISIBLE_DEVICES'] = args.gpus
 
 
 # construct model
@@ -117,6 +117,9 @@ else:
 
 model = MarginNet(base_net=model, emb_dim=args.embed_dim, batch_k=args.batch_k, feat_dim=args.feat_dim)
 
+print(model.state_dict().keys())
+model.cuda()
+
 criterion = MarginLoss(margin=args.margin,nu=args.nu)
 
 optimizer = torch.optim.SGD(model.parameters(), args.lr, momentum=args.momentum, 
@@ -125,6 +128,7 @@ optimizer = torch.optim.SGD(model.parameters(), args.lr, momentum=args.momentum,
 beta = Parameter(torch.ones((args.classes,), dtype=torch.float32,device=torch.device('cuda'))*args.beta)
 
 optimizer_beta = torch.optim.SGD([beta], args.lr_beta, momentum=args.momentum, weight_decay=args.wd)
+
 
 if args.resume:
     if os.path.isfile(args.resume):
@@ -135,9 +139,11 @@ if args.resume:
         for k,v in checkpoint['state_dict'].items():
             if k.startswith('module.'):
                 k = k[7:]
-                state_dict[k] = v
+            state_dict[k] = v
         model.load_state_dict(state_dict)
         optimizer.load_state_dict(checkpoint['optimizer'])
+        optimizer_beta.load_state_dict(checkpoint['optimizer_beta'])
+        beta = checkpoint['beta']
         print("=> loaded checkpoint '{}' (epoch {})"
               .format(args.resume, checkpoint['epoch']))
     else:
@@ -147,7 +153,6 @@ if args.resume:
 #if len(args.gpus.split(',')) > 1:
 #    model = torch.nn.DataParallel(model)
 
-model.cuda()
 
 
 # dataset 
@@ -248,11 +253,13 @@ def train(train_loader, model, criterion, optimizer, optimizer_beta, epoch, args
 def adjust_learning_rate(optimizer, epoch, args):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
     steps = [int(step) for step in args.steps.split(',')]
-    #lr = args.lr * (0.1 ** (epoch // 30))
-    if epoch in steps:
-        for param_group in optimizer.param_groups:
-            #param_group['lr'] = lr
-            param_group['lr'] *= args.factor
+    lr = args.lr
+    for i in range(epoch+1):
+        if i in steps:
+            lr *= args.factor
+    for param_group in optimizer.param_groups:
+        #param_group['lr'] = lr
+        param_group['lr'] *= lr
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -289,7 +296,9 @@ if __name__ == "__main__":
             'epoch': epoch+1,
             'arch': args.model,
             'state_dict': model.state_dict(),
-            'optimizer': optimizer.state_dict()
+            'optimizer': optimizer.state_dict(),
+            'optimizer_beta': optimizer_beta.state_dict(),
+            'beta': beta
             }
         torch.save(state, 'checkpoints/checkpoint_%d.pth.tar'%(epoch+1))
 

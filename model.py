@@ -124,6 +124,8 @@ class   DistanceWeightedSampling(nn.Module):
         distance = distance.clamp(min=self.cutoff)
         log_weights = ((2.0 - float(d)) * distance.log() - (float(d-3)/2)*torch.log(torch.clamp(1.0 - 0.25*(distance*distance), min=1e-8)))
 
+        log_weights = (log_weights - log_weights.min()) / (log_weights.max() - log_weights.min() + 1e-8)
+
         weights = torch.exp(log_weights - torch.max(log_weights))
 
 
