@@ -77,8 +77,12 @@ parser.add_argument('--seed', type=int, default=None,
                     help='random seed to use')
 parser.add_argument('--model', type=str, default='resnet50',choices=model_names,
                     help='type of model to use. see vision_model for options.')
+parser.add_argument('--save-prefix', type=str,required=True,
+                    help='prefix of saved checkpoint.')
 parser.add_argument('--use-pretrained', action='store_true',
-                    help='enable using pretrained model from gluon.')
+                    help='enable using pretrained model.')
+parser.add_argument('--normalize-weights', action='store_true',
+                    help='normalize log weights .')
 parser.add_argument('--print-freq', type=int, default=20,
                     help='number of batches to wait before logging.')
 args = parser.parse_args()
@@ -115,7 +119,7 @@ else:
         exit(-1)
 
 
-model = MarginNet(base_net=model, emb_dim=args.embed_dim, batch_k=args.batch_k, feat_dim=args.feat_dim)
+model = MarginNet(base_net=model, emb_dim=args.embed_dim, batch_k=args.batch_k, feat_dim=args.feat_dim,normalize=args.normalize_weights )
 
 print(model.state_dict().keys())
 model.cuda()
@@ -164,7 +168,8 @@ normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
 train_dataset = datasets.ImageFolder(
     traindir,
     transforms.Compose([
-        transforms.RandomResizedCrop(224),
+        #transforms.RandomResizedCrop(224),
+        transforms.Resize((224,224)),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
         normalize])
@@ -180,31 +185,49 @@ train_loader = torch.utils.data.DataLoader(
     )
 
 
-#def evaluate_emb(emb, labels):
-#    """Evaluate embeddings based on Recall@k."""
-#    d_mat = get_distance_matrix(emb)
-#    d_mat = d_mat.asnumpy()
-#    labels = labels.asnumpy()
+def evaluate_emb(emb, labels):
+    """Evaluate embeddings based on Recall@k."""
+    d_mat = get_distance_matrix(emb)
+    d_mat = d_mat.asnumpy()
+    labels = labels.asnumpy()
+
+    names = []
+    accs = []
+    for k in [1, 2, 4, 8, 16]:
+        names.append('Recall@%d' % k)
+        correct, cnt = 0.0, 0.0
+        for i in range(emb.shape[0]):
+            d_mat[i, i] = 1e10
+            nns = argpartition(d_mat[i], k)[:k]
+            if any(labels[i] == labels[nn] for nn in nns):
+                correct += 1
+            cnt += 1
+        accs.append(correct/cnt)
+    return names, accs
+
+#def validate(val_loader, model, criterion, args):
+#    outputs = []
+#    labels = []
 #
-#    names = []
-#    accs = []
-#    for k in [1, 2, 4, 8, 16]:
-#        names.append('Recall@%d' % k)
-#        correct, cnt = 0.0, 0.0
-#        for i in range(emb.shape[0]):
-#            d_mat[i, i] = 1e10
-#            nns = argpartition(d_mat[i], k)[:k]
-#            if any(labels[i] == labels[nn] for nn in nns):
-#                correct += 1
-#            cnt += 1
-#        accs.append(correct/cnt)
-#    return names, accs
+#    model.eval()
+#    
+#    with torch.no_grad():
+#        end = time.time()
+#        for i, (input, target) in enumerate(val_loader):
+#            outpus += model(input)[-1].cpu().tolist()
+#            labels += target.cpu().tolist()
 #
+
+
+
+
+
 
 def train(train_loader, model, criterion, optimizer, optimizer_beta, epoch, args):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
+    pair_cnts = AverageMeter()
 
     # switch to train mode
     model.train()
@@ -235,6 +258,7 @@ def train(train_loader, model, criterion, optimizer, optimizer_beta, epoch, args
         loss.backward()
         optimizer.step()
         optimizer_beta.step()
+        pair_cnts.update(pair_cnt)
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -245,9 +269,9 @@ def train(train_loader, model, criterion, optimizer, optimizer_beta, epoch, args
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                  'Pair Num {pair_cnt}'.format(
+                  'PairNum {pair_cnt.val:.2f} ({pair_cnt.avg: .2f}) '.format(
                    epoch, i, len(train_loader), batch_time=batch_time,
-                   data_time=data_time, loss=losses, pair_cnt=pair_cnt))
+                   data_time=data_time, loss=losses, pair_cnt=pair_cnts))
 
 
 def adjust_learning_rate(optimizer, epoch, args):
@@ -300,7 +324,7 @@ if __name__ == "__main__":
             'optimizer_beta': optimizer_beta.state_dict(),
             'beta': beta
             }
-        torch.save(state, 'checkpoints/checkpoint_%d.pth.tar'%(epoch+1))
+        torch.save(state, 'checkpoints/%s_checkpoint_%d.pth.tar'%(args.save_prefix,epoch+1))
 
 
 

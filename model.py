@@ -42,7 +42,7 @@ class MarginNet(nn.Module):
         - The output of DistanceWeightedSampling.
     """
     
-    def __init__(self, base_net, emb_dim, batch_k, feat_dim=None):
+    def __init__(self, base_net, emb_dim, batch_k, feat_dim=None, normalize=False):
         super(MarginNet, self).__init__()
         self.base_net = base_net
         try:
@@ -54,7 +54,7 @@ class MarginNet(nn.Module):
                 raise Exception("Neither does the base_net hase fc layer nor in_dim is specificed")
         self.dense = nn.Linear(in_dim, emb_dim)
         self.normalize = l2_norm
-        self.sampled = DistanceWeightedSampling(batch_k=batch_k)
+        self.sampled = DistanceWeightedSampling(batch_k=batch_k, normalize=normalize)
 
     def forward(self,x):
         x = self.base_net(x)
@@ -111,11 +111,12 @@ class   DistanceWeightedSampling(nn.Module):
 
     '''
 
-    def __init__(self, batch_k, cutoff=0.5, nonzero_loss_cutoff=1.4, **kwargs):
+    def __init__(self, batch_k, cutoff=0.5, nonzero_loss_cutoff=1.4, normalize =False,  **kwargs):
         super(DistanceWeightedSampling,self).__init__()
         self.batch_k = batch_k
         self.cutoff = cutoff
         self.nonzero_loss_cutoff = nonzero_loss_cutoff
+        self.normalize = normalize
 
     def forward(self, x):
         k = self.batch_k
@@ -124,21 +125,21 @@ class   DistanceWeightedSampling(nn.Module):
         distance = distance.clamp(min=self.cutoff)
         log_weights = ((2.0 - float(d)) * distance.log() - (float(d-3)/2)*torch.log(torch.clamp(1.0 - 0.25*(distance*distance), min=1e-8)))
 
-        log_weights = (log_weights - log_weights.min()) / (log_weights.max() - log_weights.min() + 1e-8)
+        if self.normalize:
+            log_weights = (log_weights - log_weights.min()) / (log_weights.max() - log_weights.min() + 1e-8)
 
         weights = torch.exp(log_weights - torch.max(log_weights))
 
-
-        if x.device.type == 'gpu':
+        if x.device != weights.device:
             weights = weights.to(x.device)
 
         mask = torch.ones_like(weights)
         for i in range(0,n,k):
             mask[i:i+k, i:i+k] = 0
 
-        mask_uniform_probs = mask *(1.0/(n-k))
+        mask_uniform_probs = mask.double() *(1.0/(n-k))
 
-        weights = weights*mask*((distance < self.nonzero_loss_cutoff).float())
+        weights = weights*mask*((distance < self.nonzero_loss_cutoff).float()) + 1e-8
         weights_sum = torch.sum(weights, dim=1, keepdim=True)
         weights = weights / weights_sum
 
